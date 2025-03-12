@@ -11,4 +11,6 @@ const pool = mysql.createPool({
   queueLimit: 0,
 });
 
-module.exports = pool.promise();
+const db = pool.promise(); // Ensure promise-based queries
+
+module.exports = db; // ✅ Export `db` instead of `pool.promise()`

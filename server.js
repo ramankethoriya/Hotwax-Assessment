@@ -1,120 +1,149 @@
-require('dotenv').config();
-const express = require('express');
-const mysql = require('mysql2');
-const bodyParser = require('body-parser');
+require("dotenv").config();
+const express = require("express");
+const bodyParser = require("body-parser");
+const db = require("./SRC/config/db.js");
 
 const app = express();
 app.use(bodyParser.json());
 
-// Database connection
-const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: 'yourpassword',
-    database: 'ecommerce'
+app.get("/", (req, res) => {
+    res.send("Hello!");
 });
 
-db.connect(err => {
-    if (err) throw err;
-    console.log('MySQL Connected...');
+// **Create Order**
+app.post("/orders", async (req, res) => {
+    try {
+        const { order_date, customer_id, shipping_contact_mech_id, billing_contact_mech_id, order_items } = req.body;
+
+        // Insert order
+        const [orderResult] = await db.query(
+            `INSERT INTO Order_Header (order_date, customer_id, shipping_contact_mech_id, billing_contact_mech_id) VALUES (?, ?, ?, ?)`,
+            [order_date, customer_id, shipping_contact_mech_id, billing_contact_mech_id]
+        );
+
+        const orderId = orderResult.insertId;
+
+        // Insert order items
+        if (order_items && order_items.length > 0) {
+            const values = order_items.map(item => [orderId, item.product_id, item.quantity, item.status]);
+            await db.query(
+                `INSERT INTO Order_Item (order_id, product_id, quantity, status) VALUES ?`,
+                [values]
+            );
+        }
+
+        res.status(201).json({ message: "Order created", order_id: orderId });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Create Order
-app.post('/orders', (req, res) => {
-    const { order_date, customer_id, shipping_contact_mech_id, billing_contact_mech_id, order_items } = req.body;
+// **Retrieve Order**
+app.get("/orders/:order_id", async (req, res) => {
+    try {
+        const orderId = req.params.order_id;
 
-    const sql = `INSERT INTO Order_Header (order_date, customer_id, shipping_contact_mech_id, billing_contact_mech_id) VALUES (?, ?, ?, ?)`;
-    db.query(sql, [order_date, customer_id, shipping_contact_mech_id, billing_contact_mech_id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
+        const [orderResult] = await db.query(
+            `SELECT o.*, c.first_name, c.last_name 
+             FROM Order_Header o
+             JOIN Customer c ON o.customer_id = c.customer_id
+             WHERE o.order_id = ?`,
+            [orderId]
+        );
 
-        const orderId = result.insertId;
-        const orderItemsSQL = `INSERT INTO Order_Item (order_id, product_id, quantity, status) VALUES ?`;
-        const values = order_items.map(item => [orderId, item.product_id, item.quantity, item.status]);
+        if (orderResult.length === 0) {
+            return res.status(404).json({ error: "Order not found" });
+        }
 
-        db.query(orderItemsSQL, [values], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.status(201).json({ message: 'Order created', order_id: orderId });
-        });
-    });
+        const [itemsResult] = await db.query(
+            `SELECT * FROM Order_Item WHERE order_id = ?`,
+            [orderId]
+        );
+
+        res.status(200).json({ order: orderResult[0], items: itemsResult });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Retrieve Order
-app.get('/orders/:order_id', (req, res) => {
-    const orderId = req.params.order_id;
+// **Update Order**
+app.put("/orders/:order_id", async (req, res) => {
+    try {
+        const orderId = req.params.order_id;
+        const { shipping_contact_mech_id, billing_contact_mech_id } = req.body;
 
-    const sql = `
-        SELECT o.*, c.first_name, c.last_name 
-        FROM Order_Header o
-        JOIN Customer c ON o.customer_id = c.customer_id
-        WHERE o.order_id = ?`;
+        await db.query(
+            `UPDATE Order_Header SET shipping_contact_mech_id = ?, billing_contact_mech_id = ? WHERE order_id = ?`,
+            [shipping_contact_mech_id, billing_contact_mech_id, orderId]
+        );
 
-    db.query(sql, [orderId], (err, orderResult) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (orderResult.length === 0) return res.status(404).json({ error: 'Order not found' });
-
-        const itemsSQL = `SELECT * FROM Order_Item WHERE order_id = ?`;
-        db.query(itemsSQL, [orderId], (err, itemsResult) => {
-            if (err) return res.status(500).json({ error: err.message });
-
-            res.status(200).json({ order: orderResult[0], items: itemsResult });
-        });
-    });
+        res.status(200).json({ message: "Order updated" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Update Order
-app.put('/orders/:order_id', (req, res) => {
-    const orderId = req.params.order_id;
-    const { shipping_contact_mech_id, billing_contact_mech_id } = req.body;
-
-    const sql = `UPDATE Order_Header SET shipping_contact_mech_id = ?, billing_contact_mech_id = ? WHERE order_id = ?`;
-    db.query(sql, [shipping_contact_mech_id, billing_contact_mech_id, orderId], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(200).json({ message: 'Order updated' });
-    });
+// **Delete Order**
+app.delete("/orders/:order_id", async (req, res) => {
+    try {
+        const orderId = req.params.order_id;
+        await db.query(`DELETE FROM Order_Header WHERE order_id = ?`, [orderId]);
+        res.status(200).json({ message: "Order deleted" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Delete Order
-app.delete('/orders/:order_id', (req, res) => {
-    const orderId = req.params.order_id;
-    db.query(`DELETE FROM Order_Header WHERE order_id = ?`, [orderId], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(200).json({ message: 'Order deleted' });
-    });
+// **Add Order Item**
+app.post("/orders/:order_id/items", async (req, res) => {
+    try {
+        const orderId = req.params.order_id;
+        const { product_id, quantity, status } = req.body;
+
+        await db.query(
+            `INSERT INTO Order_Item (order_id, product_id, quantity, status) VALUES (?, ?, ?, ?)`,
+            [orderId, product_id, quantity, status]
+        );
+
+        res.status(201).json({ message: "Order item added" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Add Order Item
-app.post('/orders/:order_id/items', (req, res) => {
-    const orderId = req.params.order_id;
-    const { product_id, quantity, status } = req.body;
+// **Update Order Item**
+app.put("/orders/:order_id/items/:order_item_seq_id", async (req, res) => {
+    try {
+        const { order_id, order_item_seq_id } = req.params;
+        const { quantity, status } = req.body;
 
-    const sql = `INSERT INTO Order_Item (order_id, product_id, quantity, status) VALUES (?, ?, ?, ?)`;
-    db.query(sql, [orderId, product_id, quantity, status], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(201).json({ message: 'Order item added' });
-    });
+        await db.query(
+            `UPDATE Order_Item SET quantity = ?, status = ? WHERE order_item_seq_id = ? AND order_id = ?`,
+            [quantity, status, order_item_seq_id, order_id]
+        );
+
+        res.status(200).json({ message: "Order item updated" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Update Order Item
-app.put('/orders/:order_id/items/:order_item_seq_id', (req, res) => {
-    const { order_id, order_item_seq_id } = req.params;
-    const { quantity, status } = req.body;
+// **Delete Order Item**
+app.delete("/orders/:order_id/items/:order_item_seq_id", async (req, res) => {
+    try {
+        const { order_id, order_item_seq_id } = req.params;
 
-    const sql = `UPDATE Order_Item SET quantity = ?, status = ? WHERE order_item_seq_id = ? AND order_id = ?`;
-    db.query(sql, [quantity, status, order_item_seq_id, order_id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(200).json({ message: 'Order item updated' });
-    });
+        await db.query(
+            `DELETE FROM Order_Item WHERE order_item_seq_id = ? AND order_id = ?`,
+            [order_item_seq_id, order_id]
+        );
+
+        res.status(200).json({ message: "Order item deleted" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Delete Order Item
-app.delete('/orders/:order_id/items/:order_item_seq_id', (req, res) => {
-    const { order_id, order_item_seq_id } = req.params;
-
-    db.query(`DELETE FROM Order_Item WHERE order_item_seq_id = ? AND order_id = ?`, [order_item_seq_id, order_id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(200).json({ message: 'Order item deleted' });
-    });
-});
-
-// Start Server
-app.listen(3000, () => console.log('Server running on port 3000'));
+// **Start Server**
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
